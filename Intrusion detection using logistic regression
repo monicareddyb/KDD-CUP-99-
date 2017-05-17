@@ -1,0 +1,83 @@
+dataPath = "/FileStore/tables/fqtppani1492529118892/kddcup_data_corrected-e838f"
+dataFile = sc.textFile(dataPath)
+dataFile.count()
+testDataPath = "/FileStore/tables/iqh6akzw1492530820194/corrected"
+testFile = sc.textFile(testDataPath)
+
+testFile.count()
+from numpy import array
+from pyspark.mllib.regression import LabeledPoint
+def parseData(l):
+    lSplit = l.split(",")
+    clnLSplit = lSplit[0:1]+lSplit[4:41]
+    attack = 1.0
+    if lSplit[41]=='normal.':
+        attack = 0.0
+    return LabeledPoint(attack, array([float(x) for x in clnLSplit]))
+
+trainData = dataFile.map(parseData)
+testData = testFile.map(parseData)
+from pyspark.mllib.classification import LogisticRegressionWithLBFGS
+lRModel = LogisticRegressionWithLBFGS.train(trainData)
+labPre = testData.map(lambda p: (p.label, lRModel.predict(p.features)))
+testAcc = labPre.filter(lambda (v, p): v == p).count() / float(testData.count())
+print "The accuracy of test data is {}".format(round(testAcc,4))
+def parseCorr(l):
+    lSplit = l.split(",")
+    clnLSplit = lSplit[0:1]+lSplit[4:25]+lSplit[26:27]+lSplit[28:35]+lSplit[36:38]+lSplit[39:40]
+    attack = 1.0
+    if lSplit[41]=='normal.':
+        attack = 0.0
+    return LabeledPoint(attack, array([float(x) for x in clnLSplit]))
+
+corrTrainData = dataFile.map(parseCorr)
+corrTestData = testFile.map(parseCorr)
+lRModel2 = LogisticRegressionWithLBFGS.train(corrTrainData)
+labPre = corrTestData.map(lambda p: (p.label, lRModel2.predict(p.features)))
+
+testAcc = labPre.filter(lambda (v, p): v == p).count() / float(corrTestData.count())
+
+
+print " The accuracy of test data is  {}".format(round(testAcc,4))
+colNames = ["land","wrong_fragment",
+             "urgent","hot","num_failed_logins","logged_in","num_compromised",
+             "root_shell","su_attempted","num_root","num_file_creations",
+             "num_shells","num_access_files","num_outbound_cmds",
+             "is_hot_login","is_guest_login","count","srv_count","serror_rate",
+             "srv_serror_rate","rerror_rate","srv_rerror_rate","same_srv_rate",
+             "diff_srv_rate","srv_diff_host_rate","dst_host_count","dst_host_srv_count",
+             "dst_host_same_srv_rate","dst_host_diff_srv_rate","dst_host_same_src_port_rate",
+             "dst_host_srv_diff_host_rate","dst_host_serror_rate","dst_host_srv_serror_rate",
+             "dst_host_rerror_rate","dst_host_srv_rerror_rate"]
+def parseCategory(l):
+    lSplit = l.split(",")
+    clnLSplit = lSplit[6:41]
+    attack = 1.0
+    if lSplit[41]=='normal.':
+        attack = 0.0
+    return LabeledPoint(attack, array([float(x) for x in clnLSplit]))
+
+trainCat = dataFile.map(parseCategory)
+from pyspark.mllib.stat import Statistics
+
+chisq = Statistics.chiSqTest(trainCat)
+import pandas as pd
+pd.set_option('display.max_colwidth', 50)
+recs = [(res.statistic, res.pValue) for res in chisq]
+
+chisqDf = pd.DataFrame(data=recs, index= colNames, columns=["Statistic","p-value"])
+chisqDf
+def parseChi(l):
+    lSplit = l.split(",")
+    clnLSplit = lSplit[0:1] + lSplit[4:6] + lSplit[7:19] + lSplit[20:41]
+    attack = 1.0
+    if lSplit[41]=='normal.':
+        attack = 0.0
+    return LabeledPoint(attack, array([float(x) for x in clnLSplit]))
+
+trainChi = dataFile.map(parseChi)
+testChi = testFile.map(parseChi)
+lRChi = LogisticRegressionWithLBFGS.train(trainChi)
+labPre = testChi.map(lambda p: (p.label, lRChi.predict(p.features)))
+testAcc = labPre.filter(lambda (v, p): v == p).count() / float(testChi.count())
+print "The accuracy of test data is {}".format(round(testAcc,4))
