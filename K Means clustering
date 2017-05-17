@@ -1,0 +1,97 @@
+val dataFrame = sqlContext.load("com.databricks.spark.csv", Map("path" -> "/FileStore/tables/fqtppani1492529118892/kddcup_data_corrected-e838f", "header" -> "false"))
+dataFrame.printSchema
+dataFrame.groupBy($"_c41").count().orderBy($"count".desc).registerTempTable("countOfLabel")
+%sql SELECT * FROM countOfLabel
+import org.apache.spark.mllib.linalg._
+val testData = sc.textFile("/FileStore/tables/iqh6akzw1492530820194/corrected")
+testData.map(_.split(',').last).countByValue().toSeq.sortBy(_._2).reverse.foreach(println)
+val ld = testData.zipWithIndex.flatMap{ case (l,i)=>if(i==0) { None } 
+      else {
+      val temp = l.split(',').toBuffer
+      temp.remove(1, 3)
+      val lab = temp.remove(temp.length-1)
+      val av = Vectors.dense(temp.map(_.toDouble).toArray)
+      Some((lab,av))
+    }
+}
+import org.apache.spark.mllib.clustering._   
+def dlength(x: Vector, y: Vector) = math.sqrt(x.toArray.zip(y.toArray).map(t => t._1 - t._2).map(z => z * z).sum)
+def dCent(newVector: Vector, Kmod: KMeansModel) = {
+  val clu = Kmod.predict(newVector)
+  val centr = Kmod.clusterCenters(clu)
+  distance(centr, newVector)
+}
+import org.apache.spark.rdd._
+val arr = ld.values.map(_.toArray).cache()
+val colCount = arr.first().length
+val len = arr.count()
+val tot = arr.reduce(
+  (x,y) => x.zip(y).map(p=>p._1+p._2))
+val sqSum = arr.fold(
+  new Array[Double](colCount)
+)(
+  (x,y) => x.zip(y).map(p=>p._1+p._2*p._2)
+)
+val SD = sqSum.zip(tot).map {
+  case(totSq,sum) => math.sqrt(len*totSq - sum*sum)/len
+}
+val M = tot.map(_ / len)
+def norm(newVector: Vector) = {
+  val normArr=(newVector.toArray,M,SD).zipped.map( (v,m,s)=>if (s<=0) (v-m) else (v-m)/s)
+  Vectors.dense(normArr)
+}
+
+val ldNorm = ld.map(l_d => (l_d._1, norm(l_d._2))).cache()
+
+def entrCal(tots: Iterable[Int]) = {
+  val values = tots.filter(_ > 0)
+  val len: Double = values.sum
+  values.map { h =>
+        val t=h/len
+        -t * math.log(t)
+      }.sum
+}
+val iters = 10
+val eps = 1.0e-6
+def scoreClu(ldNorm: RDD[(String,Vector)], k: Int) = {
+  val KM = new KMeans()
+  KM.setRuns(iters)
+  KM.setEpsilon(eps)
+  KM.setK(k)
+  val Kmod = KM.run(ldNorm.values)
+  val lc = ldNorm.mapValues(Kmod.predict)
+  
+val cl = lc.map(_.swap)
+  val lic = cl.groupByKey().values
+  val lTot = lic.map( _.groupBy(l => l).map(_._2.size))
+  val len = ldNorm.count()
+  lTot.map(m => m.sum * entrCal(m)).sum /len
+}
+
+val kScr = (10 to 60 by 10).par.map(k =>
+  (k, scoreClu(ldNorm, k))).toList
+kScr.foreach(println)
+
+case class KMScr(k: Int, scr: Double)
+sc.parallelize(kScr).map{ case(x, y) => KMScr(x, y) }.toDF.registerTempTable("scrTab")
+%sql select * from scrTab
+val KM = new KMeans()
+KM.setRuns(iters)
+KM.setEpsilon(eps)
+KM.setK(40)
+val Kmod = KM.run(ldNorm.values)
+
+val cluLab = ldNorm.map {
+  case (lab, d) =>
+    val clu = Kmod.predict(d)
+    (clu, lab)
+}
+cluLab.countByValue.toSeq.sorted.foreach {
+  case ((clu,lab),count) =>
+        println(f"$clu%1s$lab%18s$count%8s")
+}
+case class clType(clu: Int, lab: String)
+cluLab.map {
+  case (clu, lab) => clType(clu, lab)
+}.toDF.registerTempTable("cluLab")
+%sql select clu, count(lab) as count, lab from cluLab group by clu, lab
